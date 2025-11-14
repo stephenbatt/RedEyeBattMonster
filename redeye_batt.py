@@ -1,13 +1,10 @@
-# redeye_batt.py — Monster Cockpit
-# Run: streamlit run redeye_batt.py
-
 import os, time, threading, requests
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# -------- CONFIG --------
+# ───────── CONFIG ─────────
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "").strip()
 if not FINNHUB_KEY:
     FINNHUB_KEY = st.secrets.get("FINNHUB_KEY", "")
@@ -44,10 +41,8 @@ def poller_loop():
                 cur["updated"] = now
         time.sleep(POLL_SECONDS)
 
-# -------- STREAMLIT UI --------
-st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="centered")
-st.title("🧨 RedEyeBatt Monster Cockpit")
-st.caption("Live market simulator — SPY, QQQ, IWM, BTC — paper only")
+# ───────── STREAMLIT UI ─────────
+st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
@@ -55,75 +50,84 @@ if "poller_started" not in st.session_state:
 
 if "bankroll" not in st.session_state:
     st.session_state.bankroll = 10000.0
-if "bet" not in st.session_state:
-    st.session_state.bet = 200.0
 if "fence" not in st.session_state:
     st.session_state.fence = {s: {"low": None, "high": None} for s in TICKERS}
 if "history" not in st.session_state:
     st.session_state.history = []
+if "scoreboard" not in st.session_state:
+    st.session_state.scoreboard = {s: {"wins": 0, "losses": 0} for s in TICKERS}
 
-c1, c2 = st.columns(2)
-c1.metric("💰 Bankroll", f"${st.session_state.bankroll:,.2f}")
-st.session_state.bet = c2.number_input("Bet per ticker ($)", 1, 5000, int(st.session_state.bet))
+branding, market = st.columns([1, 2])
 
-with shared_lock:
-    prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
+# ───────── Branding Column ─────────
+with branding:
+    st.image("logo.gif", width=120)
+    st.markdown("### 🧮 Scoreboard")
+    for s, record in st.session_state.scoreboard.items():
+        st.write(f"{s}: ✅ {record['wins']} | ❌ {record['losses']}")
 
-st.markdown("---")
+# ───────── Market Column ─────────
+with market:
+    st.title("🧨 RedEyeBatt Monster Cockpit")
+    st.caption("Live market simulator — paper only. You are the house.")
 
-for sym in TICKERS:
-    data = prices_snapshot[sym]
-    last, high, low, updated = data["last"], data["high"], data["low"], data["updated"]
-    st.subheader(f"📊 {sym}")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("🎯 Last", f"{last:,.2f}" if last else "--")
-    c2.metric("📈 High", f"{high:,.2f}" if high else "--")
-    c3.metric("📉 Low", f"{low:,.2f}" if low else "--")
-    st.caption(f"Last update: {updated}" if updated else "Waiting for quote...")
+    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
-    buf_key = f"buffer_{sym}"
-    if buf_key not in st.session_state:
-        st.session_state[buf_key] = 10
-    buf = st.slider(f"Buffer ± points for {sym}", 1, 200, st.session_state[buf_key], key=buf_key)
+    with shared_lock:
+        prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
 
-    if st.button(f"Set fence around {sym}", key=f"set_{sym}"):
-        st.session_state.fence[sym]["low"] = max(0.0, last - buf)
-        st.session_state.fence[sym]["high"] = last + buf
-
-    fl = st.session_state.fence[sym]["low"]
-    fh = st.session_state.fence[sym]["high"]
-    st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
-
-    if fl and fh and last:
-        if last < fl or last > fh:
-            st.error(f"🚨 {sym} breached the fence!")
-        else:
-            st.success(f"✅ {sym} is inside the fence.")
-
-    st.markdown("---")
-
-# -------- Settle & History --------
-st.subheader("📅 Manual Settle")
-if st.button("Settle Day"):
-    total_pnl = 0.0
-    rows = []
     for sym in TICKERS:
+        data = prices_snapshot[sym]
+        last, high, low, updated = data["last"], data["high"], data["low"], data["updated"]
+        st.subheader(f"📊 {sym}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🎯 Last", f"{last:,.2f}" if last else "--")
+        c2.metric("📈 High", f"{high:,.2f}" if high else "--")
+        c3.metric("📉 Low", f"{low:,.2f}" if low else "--")
+        st.caption(f"Last update: {updated}" if updated else "Waiting for quote...")
+
+        buf_key = f"buffer_{sym}"
+        if buf_key not in st.session_state:
+            st.session_state[buf_key] = 10
+        buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
+
+        bet_key = f"bet_{sym}"
+        if bet_key not in st.session_state:
+            st.session_state[bet_key] = 200
+        bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
+
+        if st.button(f"Set fence around {sym}", key=f"set_{sym}"):
+            st.session_state.fence[sym]["low"] = max(0.0, last - buf)
+            st.session_state.fence[sym]["high"] = last + buf
+
         fl = st.session_state.fence[sym]["low"]
         fh = st.session_state.fence[sym]["high"]
-        last = prices_snapshot[sym]["last"]
-        if fl is None or fh is None: continue
-        win = fl <= last <= fh
-        pnl = st.session_state.bet if win else -st.session_state.bet
-        outcome = "WIN" if win else "LOSS"
-        total_pnl += pnl
-        rows.append({
-            "Symbol": sym, "Last": last, "Low": fl, "High": fh,
-            "Outcome": outcome, "PnL": pnl, "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-    st.session_state.bankroll += total_pnl
-    st.session_state.history.extend(rows)
-    st.success(f"Settled {len(rows)} symbols → P&L: ${total_pnl:.2f}")
+        st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
 
+        if fl and fh and last:
+            if last < fl or last > fh:
+                st.error(f"🚨 {sym} breached the fence!")
+            else:
+                st.success(f"✅ {sym} is inside the fence.")
+
+        if st.button(f"Settle {sym}", key=f"settle_{sym}"):
+            win = fl <= last <= fh
+            pnl = bet if win else -bet
+            outcome = "WIN" if win else "LOSS"
+            st.session_state.bankroll += pnl
+            st.session_state.scoreboard[sym]["wins" if win else "losses"] += 1
+            st.session_state.history.append({
+                "Symbol": sym, "Last": last, "Low": fl, "High": fh,
+                "Outcome": outcome, "PnL": pnl, "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            sound = "cash-register-kaching-sound-effect-125042.mp3" if win else "ding-101492.mp3"
+            st.audio(sound)
+            st.success(f"{sym} settled: {outcome} → ${pnl:.2f}")
+
+        st.markdown("---")
+
+# ───────── History & Chart ─────────
+st.subheader("📅 Trade History")
 if st.button("Reset History"):
     st.session_state.history = []
     st.success("History cleared.")
