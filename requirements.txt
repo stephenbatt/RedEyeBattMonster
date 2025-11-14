@@ -1,0 +1,8 @@
+streamlit
+streamlit-authenticator
+pyyaml
+requests
+pandas
+plotly
+streamlit-push-notifications
+matplotlib
