@@ -1,7 +1,6 @@
 import os, time, threading, requests
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import datetime
 
 # ───────── CONFIG ─────────
@@ -148,3 +147,4 @@ if st.session_state.history:
     st.download_button("📤 Export CSV", df.to_csv(index=False), "redeye_history.csv", "text/csv")
 
 st.caption("This cockpit is paper only. No broker, no real money. Built for RedEyeBatt.")
+
