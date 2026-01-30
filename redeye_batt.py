@@ -1,10 +1,10 @@
 import os
 import time
 import threading
+from datetime import datetime
 import requests
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 
 # ───────── CONFIG ─────────
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "").strip()
@@ -13,12 +13,13 @@ if not FINNHUB_KEY:
 
 TICKERS = ["SPY", "BINANCE:BTCUSDT"]
 BASE_URL = "https://finnhub.io/api/v1/quote"
-POLL_SECONDS = 5
+POLL_SECONDS = 1  # Super fast updates
 
+# Shared state
 shared_prices = {s: {"last": None, "high": None, "low": None, "updated": None} for s in TICKERS}
 shared_lock = threading.Lock()
 
-# ───────── FETCH QUOTE ─────────
+# ───────── FETCH QUOTES ─────────
 def fetch_quote(symbol):
     try:
         if symbol == "BINANCE:BTCUSDT":
@@ -30,7 +31,7 @@ def fetch_quote(symbol):
             price = float(r.json()["price"])
             return {"c": price, "h": price, "l": price}
         else:  # SPY via Finnhub
-            r = requests.get(BASE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=8)
+            r = requests.get(BASE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=5)
             if r.status_code != 200:
                 return {}
             data = r.json()
@@ -42,98 +43,88 @@ def fetch_quote(symbol):
     except Exception:
         return {}
 
-# ───────── POLLER LOOP ─────────
+# ───────── POLLER THREAD ─────────
 def poller_loop():
     while True:
         for sym in TICKERS:
             data = fetch_quote(sym)
             if not data:
                 continue
-            last = float(data.get("c") or 0.0)
-            high = float(data.get("h") or last)
-            low = float(data.get("l") or last)
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if last <= 0:
-                continue
             with shared_lock:
-                cur = shared_prices[sym]
-                cur["last"] = last
-                cur["high"] = max(high, cur["high"]) if cur["high"] is not None else high
-                cur["low"] = min(low, cur["low"]) if cur["low"] is not None else low
-                cur["updated"] = now
+                shared_prices[sym]["last"] = data["c"]
+                shared_prices[sym]["high"] = data.get("h", data["c"])
+                shared_prices[sym]["low"] = data.get("l", data["c"])
+                shared_prices[sym]["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         time.sleep(POLL_SECONDS)
 
 # ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
+# Start poller thread once
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
 
-# Initialize session state
+# Session state initialization
 st.session_state.setdefault("bankroll", 10000.0)
-st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
+st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
+st.session_state.setdefault("buffer", {s: 0 for s in TICKERS})
+st.session_state.setdefault("bet_amount", {s: 200 for s in TICKERS})
 
 # ───────── LAYOUT ─────────
-branding, market = st.columns([1, 2])
+branding_col, market_col = st.columns([1, 2])
 
-# Branding
-with branding:
+# Branding column
+with branding_col:
     try:
-        st.image("redeye_batt_logo.gif", width=120)
+        st.image("logo.gif", width=120)
     except Exception:
-        st.write("🧨 RedEyeBatt Monster Cockpit")
+        st.write("🦇 RedEyeBatt Logo missing")
     st.markdown("### 🧮 Scoreboard")
-    for s, record in st.session_state.scoreboard.items():
-        st.write(f"{s}: ✅ {record['wins']} | ❌ {record['losses']}")
+    for s, rec in st.session_state.scoreboard.items():
+        st.write(f"{s}: ✅ {rec['wins']} | ❌ {rec['losses']}")
 
-# Market
-with market:
+# Market column
+with market_col:
+    st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
-    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
-    with shared_lock:
-        snapshot = {k: v.copy() for k, v in shared_prices.items()}
+    st.number_input("💰 Bankroll", value=st.session_state.bankroll, key="bankroll_input")
 
     for sym in TICKERS:
-        data = snapshot[sym]
-        last = data["last"]
-        high = data["high"]
-        low = data["low"]
-        updated = data["updated"]
+        st.markdown(f"📊 {sym}" + (" (Heartbeat)" if sym.startswith("BINANCE") else ""))
+        price_data = shared_prices[sym]
+        last = price_data["last"]
+        updated = price_data["updated"]
 
-        st.subheader(f"📊 {sym} {'(Heartbeat)' if 'BTC' in sym else ''}")
-        st.metric("Price", f"${last:,.2f}" if last else "❌ Waiting for data...")
-        st.write(f"Updated: {updated if updated else '--'}")
+        st.write("Price")
+        st.write(f"${last:,.2f}" if last else "❌ Waiting for data...")
+        st.write("Updated")
+        st.write(updated or "—")
 
-        buf_key = f"buffer_{sym}"
-        if buf_key not in st.session_state:
-            st.session_state[buf_key] = 10
-        buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
+        # Fence sliders
+        st.session_state.buffer[sym] = st.slider(
+            f"Buffer ± points for {sym}",
+            0, 50, st.session_state.buffer.get(sym, 0), key=f"buffer_{sym}"
+        )
+        st.session_state.bet_amount[sym] = st.number_input(
+            f"Bet per {sym} ($)", value=st.session_state.bet_amount.get(sym, 200), key=f"bet_{sym}"
+        )
 
-        bet_key = f"bet_{sym}"
-        if bet_key not in st.session_state:
-            st.session_state[bet_key] = 200
-        bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
+        st.session_state.fence[sym]["low"] = last - st.session_state.buffer[sym] if last else None
+        st.session_state.fence[sym]["high"] = last + st.session_state.buffer[sym] if last else None
 
-        if st.button(f"Set fence around {sym}", key=f"set_{sym}"):
-            st.session_state.fence[sym]["low"] = max(0.0, last - buf) if last else None
-            st.session_state.fence[sym]["high"] = last + buf if last else None
+        st.write(f"Fence: Low = {st.session_state.fence[sym]['low'] if last else '—'} | High = {st.session_state.fence[sym]['high'] if last else '—'}")
 
-        fl = st.session_state.fence[sym]["low"]
-        fh = st.session_state.fence[sym]["high"]
-        st.write(f"Fence: Low = {fl if fl is not None else '--'} | High = {fh if fh is not None else '--'}")
+    st.markdown("📅 Trade History")
+    if not st.session_state.history:
+        st.write("No trades yet.")
+    else:
+        df_hist = pd.DataFrame(st.session_state.history)
+        st.dataframe(df_hist)
 
-# ───────── Trade History ─────────
-st.subheader("📅 Trade History")
-if st.session_state.history:
-    df = pd.DataFrame(st.session_state.history[::-1])
-    st.dataframe(df, use_container_width=True)
-else:
-    st.write("No trades yet.")
-
-st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
+st.markdown("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
 
 
