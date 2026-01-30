@@ -13,10 +13,9 @@ if not FINNHUB_KEY:
 
 TICKERS = ["SPY", "BINANCE:BTCUSDT"]
 BASE_URL = "https://finnhub.io/api/v1/quote"
-POLL_SECONDS = 3  # fast enough to see "Timex-style" updates
+POLL_SECONDS = 5
 
-# Shared state for prices
-shared_prices = {s: {"last": 0.0, "high": 0.0, "low": 0.0, "updated": None} for s in TICKERS}
+shared_prices = {s: {"last": None, "high": None, "low": None, "updated": None} for s in TICKERS}
 shared_lock = threading.Lock()
 
 # ───────── FETCH QUOTE ─────────
@@ -31,7 +30,7 @@ def fetch_quote(symbol):
             price = float(r.json()["price"])
             return {"c": price, "h": price, "l": price}
         else:  # SPY via Finnhub
-            r = requests.get(BASE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=5)
+            r = requests.get(BASE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=8)
             if r.status_code != 200:
                 return {}
             data = r.json()
@@ -43,100 +42,89 @@ def fetch_quote(symbol):
     except Exception:
         return {}
 
-# ───────── POLLER THREAD ─────────
+# ───────── POLLER LOOP ─────────
 def poller_loop():
     while True:
         for sym in TICKERS:
             data = fetch_quote(sym)
-            if not data: 
+            if not data:
                 continue
             last = float(data.get("c") or 0.0)
+            high = float(data.get("h") or last)
+            low = float(data.get("l") or last)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if last <= 0: 
+            if last <= 0:
                 continue
             with shared_lock:
                 cur = shared_prices[sym]
                 cur["last"] = last
-                # Update high/low based on new last
-                cur["high"] = max(cur["high"], last) if cur["high"] else last
-                cur["low"] = min(cur["low"], last) if cur["low"] else last
+                cur["high"] = max(high, cur["high"]) if cur["high"] is not None else high
+                cur["low"] = min(low, cur["low"]) if cur["low"] is not None else low
                 cur["updated"] = now
         time.sleep(POLL_SECONDS)
 
-# ───────── STREAMLIT PAGE ─────────
+# ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
-# Start poller once
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
-    # Wait a few seconds for first quotes
-    wait_start = time.time()
-    while all(v["last"] == 0 for v in shared_prices.values()) and time.time() - wait_start < 5:
-        time.sleep(0.5)
 
 # Initialize session state
 st.session_state.setdefault("bankroll", 10000.0)
-st.session_state.setdefault("fence", {s: {"low": 0.0, "high": 0.0} for s in TICKERS})
+st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
 
 # ───────── LAYOUT ─────────
 branding, market = st.columns([1, 2])
 
-# Branding column
+# Branding
 with branding:
     try:
-        st.image("logo.gif", width=120)
-    except:
-        st.write("Logo missing or too large")
+        st.image("redeye_batt_logo.gif", width=120)
+    except Exception:
+        st.write("🧨 RedEyeBatt Monster Cockpit")
     st.markdown("### 🧮 Scoreboard")
     for s, record in st.session_state.scoreboard.items():
-        if s == "BINANCE:BTCUSDT":
-            st.write(f"{s}: ✅ heartbeat only")
-        else:
-            st.write(f"{s}: ✅ {record['wins']} | ❌ {record['losses']}")
+        st.write(f"{s}: ✅ {record['wins']} | ❌ {record['losses']}")
 
-# Market column
+# Market
 with market:
-    st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
     st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
     with shared_lock:
-        prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
+        snapshot = {k: v.copy() for k, v in shared_prices.items()}
 
     for sym in TICKERS:
-        data = prices_snapshot[sym]
-        last, high, low, updated = data["last"], data["high"], data["low"], data["updated"]
+        data = snapshot[sym]
+        last = data["last"]
+        high = data["high"]
+        low = data["low"]
+        updated = data["updated"]
 
-        st.subheader(f"📊 {sym}" + (" (Heartbeat)" if sym == "BINANCE:BTCUSDT" else ""))
-        if last == 0:
-            st.error(f"❌ Waiting for {sym} data...")
-        else:
-            st.metric("Price", f"${last:,.2f}")
-            st.write(f"Updated: {updated}")
+        st.subheader(f"📊 {sym} {'(Heartbeat)' if 'BTC' in sym else ''}")
+        st.metric("Price", f"${last:,.2f}" if last else "❌ Waiting for data...")
+        st.write(f"Updated: {updated if updated else '--'}")
 
-        # Buffer slider
         buf_key = f"buffer_{sym}"
         if buf_key not in st.session_state:
             st.session_state[buf_key] = 10
         buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
 
-        # Bet input
         bet_key = f"bet_{sym}"
         if bet_key not in st.session_state:
             st.session_state[bet_key] = 200
         bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
 
-        # Fence buttons
         if st.button(f"Set fence around {sym}", key=f"set_{sym}"):
-            st.session_state.fence[sym]["low"] = max(0.0, last - buf)
-            st.session_state.fence[sym]["high"] = last + buf
+            st.session_state.fence[sym]["low"] = max(0.0, last - buf) if last else None
+            st.session_state.fence[sym]["high"] = last + buf if last else None
 
         fl = st.session_state.fence[sym]["low"]
         fh = st.session_state.fence[sym]["high"]
-        st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
+        st.write(f"Fence: Low = {fl if fl is not None else '--'} | High = {fh if fh is not None else '--'}")
 
 # ───────── Trade History ─────────
 st.subheader("📅 Trade History")
