@@ -7,72 +7,83 @@ import pandas as pd
 from datetime import datetime
 
 # ───────── CONFIG ─────────
-ALPACA_KEY = os.getenv("ALPACA_KEY", "").strip()
-ALPACA_SECRET = os.getenv("ALPACA_SECRET", "").strip()
-ALPACA_BASE = "https://paper-api.alpaca.markets"
+FINNHUB_KEY = os.getenv("FINNHUB_KEY", "").strip()
+if not FINNHUB_KEY:
+    FINNHUB_KEY = st.secrets.get("FINNHUB_KEY", "")
 
+TICKERS = ["SPY", "BINANCE:BTCUSDT"]
+BASE_URL = "https://finnhub.io/api/v1/quote"
 POLL_SECONDS = 5
 
-TICKERS = ["SPY", "BTC"]
-
-shared_prices = {s: {"last": 0.0, "updated": None} for s in TICKERS}
+shared_prices = {s: {"last": 0.0, "high": 0.0, "low": 0.0, "updated": None} for s in TICKERS}
 shared_lock = threading.Lock()
 
-# ───────── FETCH FUNCTIONS ─────────
-def fetch_spy_price():
+# ───────── FETCH QUOTE ─────────
+def fetch_quote(symbol):
     try:
-        headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
-        r = requests.get(f"{ALPACA_BASE}/v2/stocks/SPY/quotes/latest", headers=headers, timeout=5)
-        if r.status_code != 200:
-            raise Exception("SPY API fail")
-        data = r.json()
-        return float(data["quote"]["ap"])
+        if symbol == "BINANCE:BTCUSDT":
+            r = requests.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": "BTCUSDT"},
+                timeout=5
+            )
+            price = float(r.json()["price"])
+            return {"c": price, "h": price, "l": price}
+        else:  # SPY via Finnhub
+            r = requests.get(BASE_URL, params={"symbol": symbol, "token": FINNHUB_KEY}, timeout=8)
+            if r.status_code != 200:
+                return {}
+            data = r.json()
+            return {
+                "c": float(data.get("c") or 0.0),
+                "h": float(data.get("h") or 0.0),
+                "l": float(data.get("l") or 0.0)
+            }
     except Exception:
-        return 691.00  # fallback SPY price
-
-def fetch_btc_price():
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/price",
-                         params={"symbol": "BTCUSDT"}, timeout=5)
-        return float(r.json()["price"])
-    except Exception:
-        return 84500.00  # fallback BTC price
+        return {}
 
 # ───────── POLLER LOOP ─────────
 def poller_loop():
     while True:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with shared_lock:
-            shared_prices["SPY"]["last"] = fetch_spy_price()
-            shared_prices["SPY"]["updated"] = now
-            shared_prices["BTC"]["last"] = fetch_btc_price()
-            shared_prices["BTC"]["updated"] = now
+        for sym in TICKERS:
+            data = fetch_quote(sym)
+            if not data:
+                continue
+            last = data["c"]
+            high = data["h"]
+            low = data["l"]
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with shared_lock:
+                cur = shared_prices[sym]
+                cur["last"] = last
+                cur["high"] = max(cur["high"], high) if cur["high"] else high
+                cur["low"] = min(cur["low"], low) if cur["low"] else low
+                cur["updated"] = now
         time.sleep(POLL_SECONDS)
 
 # ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
-# Start poller once
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
 
-# Initialize session state
 st.session_state.setdefault("bankroll", 10000.0)
-st.session_state.setdefault("bet", 200)
-st.session_state.setdefault("fence", {"SPY": {"low": 688.0, "high": 694.0}})
-st.session_state.setdefault("scoreboard", {"SPY": {"wins": 0, "losses": 0}})
+st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
+st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
 
 # ───────── LAYOUT ─────────
 branding, market = st.columns([1, 2])
 
 # Branding column
 with branding:
-    st.image("redeyebatt_logo.gif", width=120)
+    # Safe URL placeholder for logo
+    st.image("https://via.placeholder.com/120x120.png?text=RedEyeBatt", width=120)
     st.markdown("### 🧮 Scoreboard")
     for s, record in st.session_state.scoreboard.items():
-        st.write(f"{s}: ✅ {record['wins']} | ❌ {record['losses']}")
+        label = "heartbeat only" if s == "BINANCE:BTCUSDT" else f"✅ {record['wins']} | ❌ {record['losses']}"
+        st.write(f"{s}: {label}")
 
 # Market column
 with market:
@@ -80,34 +91,44 @@ with market:
     st.caption("Live market simulator — paper only. You are the house.")
 
     st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
-    st.session_state.bet = st.number_input("💰 Bet per SPY ($)", value=st.session_state.bet, step=10)
 
     with shared_lock:
-        prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
+        snapshot = {k: v.copy() for k, v in shared_prices.items()}
 
     for sym in TICKERS:
-        data = prices_snapshot[sym]
-        last = data["last"]
-        updated = data["updated"]
+        data = snapshot[sym]
+        last, high, low, updated = data["last"], data["high"], data["low"], data["updated"]
 
-        st.subheader(f"📊 {sym}" + (" (Heartbeat)" if sym=="BTC" else ""))
-        st.write(f"{'❌ Waiting for data...' if last == 0 else f'Price: ${last:,.2f}'}")
-        st.write(f"Updated: {updated if updated else '--'}")
+        st.subheader(f"📊 {sym}")
+        if last:
+            st.write(f"Price: ${last:,.2f}")
+            st.caption(f"Updated: {updated}")
+        else:
+            st.write("❌ Waiting for data...")
 
-        if sym == "SPY":
-            fence = st.session_state.fence["SPY"]
-            low, high = fence["low"], fence["high"]
-            st.write(f"SPY fence: Low = {low} | High = {high}")
+        buf_key = f"buffer_{sym}"
+        st.session_state.setdefault(buf_key, 10)
+        buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
 
-            # Optional: automatic win detection placeholder
-            if low <= last <= high:
-                st.success("✅ SPY inside fence (WIN placeholder)")
-                # st.session_state.bankroll += st.session_state.bet
-            else:
-                st.error("🚨 SPY outside fence (LOSS placeholder)")
-                # st.session_state.bankroll -= st.session_state.bet
+        bet_key = f"bet_{sym}"
+        st.session_state.setdefault(bet_key, 200)
+        bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
 
-    st.markdown("---")
-    st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
+        if st.button(f"Set fence around {sym}", key=f"set_{sym}") and last:
+            st.session_state.fence[sym]["low"] = max(0.0, last - buf)
+            st.session_state.fence[sym]["high"] = last + buf
 
+        fl = st.session_state.fence[sym]["low"]
+        fh = st.session_state.fence[sym]["high"]
+        st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
+
+# ───────── History & Info ─────────
+st.subheader("📅 Trade History")
+if st.session_state.history:
+    df = pd.DataFrame(st.session_state.history[::-1])
+    st.dataframe(df, use_container_width=True)
+else:
+    st.write("No trades yet.")
+
+st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
 
