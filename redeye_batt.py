@@ -8,7 +8,7 @@ FINNHUB_KEY = os.getenv("FINNHUB_KEY", "").strip()
 if not FINNHUB_KEY:
     FINNHUB_KEY = st.secrets.get("FINNHUB_KEY", "")
 
-TICKERS = ["SPY", "QQQ", "IWM", "BINANCE:BTCUSDT"]
+TICKERS = ["SPY", "BINANCE:BTCUSDT"]
 BASE_URL = "https://finnhub.io/api/v1/quote"
 POLL_SECONDS = 5
 
@@ -147,4 +147,5 @@ if st.session_state.history:
     st.download_button("📤 Export CSV", df.to_csv(index=False), "redeye_history.csv", "text/csv")
 
 st.caption("This cockpit is paper only. No broker, no real money. Built for RedEyeBatt.")
+
 
