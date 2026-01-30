@@ -1,59 +1,87 @@
-# ============================================================
-# RedEyeBatt Monster Cockpit — BTC LIVE HEARTBEAT (FINAL)
-# Streamlit Cloud SAFE — No deprecated calls
-# ============================================================
-
-import streamlit as st
-import requests
+import os
 import time
+import requests
+import streamlit as st
 from datetime import datetime
 
-# ------------------------------------------------------------
-# PAGE CONFIG
-# ------------------------------------------------------------
+# ───────── CONFIG ─────────
 st.set_page_config(
-    page_title="RedEyeBatt Monster Cockpit",
-    page_icon="🦇",
-    layout="centered"
+    page_title="🧨 RedEyeBatt Monster Cockpit",
+    layout="wide"
 )
 
-# ------------------------------------------------------------
-# LIVE BTC PRICE (COINBASE — WORKS ON STREAMLIT CLOUD)
-# ------------------------------------------------------------
-def fetch_btc_price():
+FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
+BASE_URL = "https://finnhub.io/api/v1/quote"
+
+REFRESH_SECONDS = 5
+
+# ───────── DATA FETCH ─────────
+def fetch_btc():
     try:
         r = requests.get(
             "https://api.coinbase.com/v2/prices/BTC-USD/spot",
             timeout=5
         )
-        r.raise_for_status()
-        return float(r.json()["data"]["amount"])
+        price = float(r.json()["data"]["amount"])
+        return price
     except Exception:
         return None
 
-# ------------------------------------------------------------
-# UI
-# ------------------------------------------------------------
-st.markdown("## 🧨 RedEyeBatt Monster Cockpit")
-st.markdown("**Live BTC price — data sanity check**")
+def fetch_spy():
+    try:
+        r = requests.get(
+            BASE_URL,
+            params={"symbol": "SPY", "token": FINNHUB_KEY},
+            timeout=8
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return float(data.get("c") or 0.0)
+    except Exception:
+        return None
+
+# ───────── HEADER / BRANDING ─────────
+left, right = st.columns([1, 3])
+
+with left:
+    st.image("logo.gif", width=130)
+
+with right:
+    st.title("🧨 RedEyeBatt Monster Cockpit")
+    st.caption("Live market simulator — paper only. You are the house.")
+
 st.markdown("---")
 
-btc_price = fetch_btc_price()
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# ───────── MARKET DATA ─────────
+btc_price = fetch_btc()
+spy_price = fetch_spy()
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-st.markdown("### 📊 BTC-USD")
+col1, col2 = st.columns(2)
 
-if btc_price is None:
-    st.error("❌ Waiting for BTC data...")
-else:
-    st.metric("BTC Price", f"${btc_price:,.2f}")
-    st.caption(f"Updated: {timestamp}")
+# ───── BTC (Heartbeat) ─────
+with col1:
+    st.subheader("📊 BTC-USD (Heartbeat)")
+    if btc_price:
+        st.metric("Bitcoin Price", f"${btc_price:,.2f}")
+        st.caption(f"Updated: {now}")
+    else:
+        st.error("Waiting for BTC data...")
+
+# ───── SPY ─────
+with col2:
+    st.subheader("📊 SPY")
+    if spy_price and spy_price > 0:
+        st.metric("SPY Price", f"${spy_price:,.2f}")
+        st.caption(f"Updated: {now}")
+    else:
+        st.warning("Waiting for SPY quote...")
 
 st.markdown("---")
-st.caption("Paper only • No broker • Real data • Built for RedEyeBatt")
+st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
 
-# ------------------------------------------------------------
-# AUTO REFRESH (CORRECT FOR NEW STREAMLIT)
-# ------------------------------------------------------------
-time.sleep(1)
+# ───────── REFRESH LOOP ─────────
+time.sleep(REFRESH_SECONDS)
 st.rerun()
+
