@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+import time
 
 # -------------------------
 # PAGE CONFIG
@@ -23,17 +23,10 @@ if "bankroll" not in st.session_state:
     st.session_state.bankroll = 10000.0
 
 # -------------------------
-# AUTO-REFRESH EVERY 5 SECONDS
-# -------------------------
-st_autorefresh(interval=5*1000, limit=None, key="btc_refresh")
-
-# -------------------------
 # HEADER / LOGO
 # -------------------------
 st.markdown("🧨 **RedEyeBatt Monster Cockpit**")
 st.markdown("Live market simulator — paper only. You are the house.")
-
-# Add your logo if available
 try:
     st.image("logo.gif", width=120)
 except Exception:
@@ -64,16 +57,15 @@ def fetch_btc_price():
 # -------------------------
 # BTC SECTION (LIVE HEARTBEAT)
 # -------------------------
+st.markdown("📊 **BINANCE:BTCUSDT (Heartbeat)**")
 btc_price = fetch_btc_price()
 if btc_price:
     st.session_state.btc_price = btc_price
     st.session_state.btc_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-st.markdown("📊 **BINANCE:BTCUSDT (Heartbeat)**")
 st.write(f"Price: {st.session_state.btc_price if st.session_state.btc_price else '❌ Waiting for BTC data...'}")
 st.write(f"Updated: {st.session_state.btc_updated if st.session_state.btc_updated else '—'}")
 
-# Fence sliders for BTC (future use)
 btc_low = st.number_input("BTC Fence Low", min_value=0.0, max_value=1000000.0, value=0.0, step=1.0, key="btc_low")
 btc_high = st.number_input("BTC Fence High", min_value=0.0, max_value=1000000.0, value=10.0, step=1.0, key="btc_high")
 
@@ -95,4 +87,10 @@ st.markdown("📅 **Trade History**")
 st.write("No trades yet.")
 
 st.markdown("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
+
+# -------------------------
+# AUTO-REFRESH LOOP (every 5 sec)
+# -------------------------
+st.experimental_singleton.clear()  # ensure fresh data each rerun
+st.experimental_rerun()  # rerun the script to update BTC price
 
