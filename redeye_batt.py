@@ -12,58 +12,63 @@ ALPACA_SECRET = st.secrets.get("ALPACA_SECRET", "")
 ALPACA_BASE = "https://paper-api.alpaca.markets"
 TICKERS = ["SPY", "BTCUSD"]
 POLL_SECONDS = 5
+MARKET_OPEN_HOUR = 9
+MARKET_OPEN_MINUTE = 15
+ALERT_SOUND = "ding-101492.mp3"  # add this file to your project
+DEFAULT_BET = 200
 
 # Shared prices and locks
-shared_prices = {s: {"last": 0.0, "high": 0.0, "low": 0.0, "updated": None} for s in TICKERS}
+shared_prices = {s: {"last": 0.0, "updated": None} for s in TICKERS}
 shared_lock = threading.Lock()
 
 # ───────── FETCH QUOTES ─────────
 def fetch_spy_price():
-    """Fetch latest SPY price from Alpaca"""
     try:
         headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
         r = requests.get(f"{ALPACA_BASE}/v2/stocks/SPY/quotes/latest", headers=headers, timeout=5)
-        if r.status_code != 200:
-            return {}
+        if r.status_code != 200: return {}
         data = r.json()
-        price = float(data["quote"]["ap"])  # Last ask price
-        return {"c": price}
+        return {"c": float(data["quote"]["ap"])}
     except Exception:
         return {}
 
 def fetch_btc_price():
-    """Fetch BTC price from Binance"""
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": "BTCUSDT"}, timeout=5)
         return {"c": float(r.json()["price"])}
     except Exception:
         return {}
 
-# ───────── FETCH 5-DAY HIGH/LOW AVERAGE ─────────
+# ───────── 5-DAY AVERAGE ─────────
 def calculate_spy_fence():
-    """Fetch last 5 trading days and compute avg high/low"""
     try:
         headers = {"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET}
         end = datetime.now()
-        start = end - timedelta(days=10)  # buffer for weekends/holidays
+        start = end - timedelta(days=10)
         r = requests.get(f"{ALPACA_BASE}/v2/stocks/SPY/bars",
                          params={"start": start.isoformat(), "end": end.isoformat(), "timeframe": "1Day"},
-                         headers=headers,
-                         timeout=8)
-        if r.status_code != 200:
-            return None, None
-        bars = r.json()["bars"]
-        last_5 = bars[-5:]
-        highs = [b["h"] for b in last_5]
-        lows = [b["l"] for b in last_5]
+                         headers=headers, timeout=8)
+        if r.status_code != 200: return None, None
+        bars = r.json()["bars"][-5:]  # last 5 trading days
+        highs = [b["h"] for b in bars]
+        lows = [b["l"] for b in bars]
         return round(sum(highs)/len(highs), 2), round(sum(lows)/len(lows), 2)
     except Exception:
         return None, None
 
 # ───────── POLLER LOOP ─────────
 def poller_loop():
+    fence_reset_done = False
     while True:
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now()
+        # Auto-reset fence at market open
+        if not fence_reset_done and now.hour == MARKET_OPEN_HOUR and now.minute >= MARKET_OPEN_MINUTE:
+            high_avg, low_avg = calculate_spy_fence()
+            if high_avg and low_avg:
+                st.session_state.fence["SPY"]["high"] = high_avg
+                st.session_state.fence["SPY"]["low"] = low_avg
+                fence_reset_done = True
+
         # SPY
         spy_data = fetch_spy_price()
         if spy_data:
@@ -71,7 +76,8 @@ def poller_loop():
             with shared_lock:
                 cur = shared_prices["SPY"]
                 cur["last"] = last
-                cur["updated"] = now
+                cur["updated"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        
         # BTC
         btc_data = fetch_btc_price()
         if btc_data:
@@ -79,7 +85,7 @@ def poller_loop():
             with shared_lock:
                 cur = shared_prices["BTCUSD"]
                 cur["last"] = last
-                cur["updated"] = now
+                cur["updated"] = now.strftime("%Y-%m-%d %H:%M:%S")
         time.sleep(POLL_SECONDS)
 
 # ───────── STREAMLIT UI ─────────
@@ -89,18 +95,21 @@ if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
 
+# Initialize session state
 st.session_state.setdefault("bankroll", 10000.0)
 st.session_state.setdefault("fence", {"SPY": {"low": None, "high": None}})
+st.session_state.setdefault("scoreboard", {"SPY": {"wins": 0, "losses": 0}})
+st.session_state.setdefault("bet", DEFAULT_BET)
+st.session_state.setdefault("history", [])
 
-# Layout
 branding, market = st.columns([1, 2])
 
 # Branding
 with branding:
     st.image("logo.gif", width=120)
     st.markdown("### 🧮 Scoreboard")
-    st.write("SPY: ✅ 0 | ❌ 0")
-    st.write("BTC: ✅ 0 | ❌ 0")
+    st.write(f"SPY: ✅ {st.session_state.scoreboard['SPY']['wins']} | ❌ {st.session_state.scoreboard['SPY']['losses']}")
+    st.write("BTC: ✅ heartbeat only")
 
 # Market
 with market:
@@ -121,17 +130,43 @@ with market:
     st.write(f"SPY Price: ${spy['last']:,.2f}" if spy["last"] else "❌ Waiting for SPY data...")
     st.caption(f"Updated: {spy['updated']}" if spy["updated"] else "")
 
-    # Auto-calculate fence (5-day avg)
-    high_avg, low_avg = calculate_spy_fence()
-    if high_avg and low_avg:
-        st.session_state.fence["SPY"]["high"] = high_avg
-        st.session_state.fence["SPY"]["low"] = low_avg
-        st.markdown(f"**SPY Fence (5-day avg):** Low = {low_avg} | High = {high_avg}")
+    # Set manual bet
+    st.session_state.bet = st.number_input("💰 Bet per SPY ($)", value=st.session_state.bet, step=50)
+
+    # SPY Fence
+    fl = st.session_state.fence["SPY"]["low"]
+    fh = st.session_state.fence["SPY"]["high"]
+    if fl and fh:
+        st.markdown(f"**SPY Fence:** Low = {fl} | High = {fh}")
+        last_price = spy["last"]
+        if last_price:
+            # Breach auto-settle
+            if last_price > fh or last_price < fl:
+                st.error(f"🚨 SPY breached the fence! Price = {last_price}")
+                st.session_state.bankroll -= st.session_state.bet
+                st.session_state.scoreboard['SPY']['losses'] += 1
+                st.session_state.history.append({
+                    "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Symbol": "SPY",
+                    "Price": last_price,
+                    "Outcome": "LOSS",
+                    "PnL": -st.session_state.bet
+                })
+                st.audio(ALERT_SOUND)
+            else:
+                st.success(f"✅ SPY is inside the fence.")
     else:
-        st.markdown("❌ Could not calculate SPY fence. Waiting for data...")
+        st.markdown("❌ SPY fence not set yet.")
 
     # Bankroll
-    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
+    st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
+
+# Trade history
+if st.session_state.history:
+    st.subheader("📅 Trade History")
+    df = pd.DataFrame(st.session_state.history[::-1])
+    st.dataframe(df, use_container_width=True)
+    st.download_button("📤 Export CSV", df.to_csv(index=False), "redeye_history.csv", "text/csv")
 
 st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
 
