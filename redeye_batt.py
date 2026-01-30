@@ -1,132 +1,93 @@
-import os
-import time
-import threading
-import requests
+# ============================================================
+# RedEyeBatt Monster Cockpit — HARD RESET VERSION
+# BTC ONLY — REAL DATA — NO PAPER LOGIC YET
+#
+# PURPOSE:
+# - Prove live data is flowing
+# - BTC price must tick up/down in real time
+# - No fences, no betting, no score logic
+#
+# If this does NOT move, the problem is NOT our code.
+# ============================================================
+
 import streamlit as st
+import requests
 from datetime import datetime
 
-# ================= CONFIG =================
-FINNHUB_KEY = os.getenv("FINNHUB_KEY", "")
-if not FINNHUB_KEY:
-    FINNHUB_KEY = st.secrets.get("FINNHUB_KEY", "")
+# ------------------------------------------------------------
+# STREAMLIT PAGE CONFIG
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="RedEyeBatt Monster Cockpit",
+    page_icon="🦇",
+    layout="centered"
+)
 
-TICKERS = ["SPY", "BINANCE:BTCUSDT"]
-BASE_URL = "https://finnhub.io/api/v1/quote"
-POLL_SECONDS = 5
+# ------------------------------------------------------------
+# AUTO REFRESH (THIS IS THE HEARTBEAT)
+# Every 1 second Streamlit reruns the script
+# ------------------------------------------------------------
+st.experimental_set_query_params()
+st_autorefresh = st.experimental_rerun
 
-shared_prices = {
-    s: {"last": None, "updated": None} for s in TICKERS
-}
-shared_lock = threading.Lock()
-
-# ================= DATA =================
-def fetch_price(symbol):
+# ------------------------------------------------------------
+# BINANCE BTC PRICE FETCH (REAL, LIVE)
+# ------------------------------------------------------------
+def fetch_btc_price():
+    """
+    Pulls LIVE BTCUSDT price directly from Binance.
+    This endpoint updates constantly.
+    """
     try:
         r = requests.get(
-            BASE_URL,
-            params={"symbol": symbol, "token": FINNHUB_KEY},
-            timeout=8
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbol": "BTCUSDT"},
+            timeout=5
         )
-        if r.status_code != 200:
-            return None
-        return float(r.json().get("c") or 0)
-    except Exception:
+        data = r.json()
+        return float(data["price"])
+    except Exception as e:
         return None
 
-def poller_loop():
-    while True:
-        for sym in TICKERS:
-            price = fetch_price(sym)
-            if not price:
-                continue
-            with shared_lock:
-                shared_prices[sym]["last"] = price
-                shared_prices[sym]["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        time.sleep(POLL_SECONDS)
 
-# ================= STREAMLIT =================
-st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
-
-if "poller_started" not in st.session_state:
-    threading.Thread(target=poller_loop, daemon=True).start()
-    st.session_state.poller_started = True
-
-st.session_state.setdefault("bankroll", 10000.0)
-st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
-st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
-
-branding, market = st.columns([1, 2])
-
-# ================= LEFT COLUMN =================
-with branding:
-    try:
-        st.image("logo.gif", width=140)
-    except:
-        st.markdown("### 🦇 RedEyeBatt")
-
-    st.markdown("### 🧮 Scoreboard")
-    for s, r in st.session_state.scoreboard.items():
-        st.write(f"{s}: ✅ {r['wins']} | ❌ {r['losses']}")
-
-# ================= MAIN COLUMN =================
-with market:
-    st.title("🧨 RedEyeBatt Monster Cockpit")
-    st.caption("Live market simulator — paper only. You are the house.")
-
-    st.session_state.bankroll = st.number_input(
-        "💰 Bankroll",
-        value=st.session_state.bankroll,
-        step=100.0
-    )
-
-    with shared_lock:
-        prices = {k: v.copy() for k, v in shared_prices.items()}
-
-    for sym in TICKERS:
-        st.markdown("---")
-        st.subheader(f"📊 {sym}")
-
-        last = prices[sym]["last"]
-        updated = prices[sym]["updated"]
-
-        if last:
-            st.metric("🎯 Last", f"{last:,.2f}")
-            st.caption(f"Updated: {updated}")
-        else:
-            st.info("Waiting for quote...")
-
-        buf = st.slider(
-            f"Buffer ± points for {sym}",
-            min_value=0,
-            max_value=50,
-            value=10,
-            key=f"buf_{sym}"
-        )
-
-        bet = st.number_input(
-            f"Bet per {sym} ($)",
-            min_value=0,
-            max_value=5000,
-            value=200,
-            key=f"bet_{sym}"
-        )
-
-        if st.button(f"Set fence for {sym}", key=f"set_{sym}") and last:
-            st.session_state.fence[sym]["low"] = last - buf
-            st.session_state.fence[sym]["high"] = last + buf
-
-        fl = st.session_state.fence[sym]["low"]
-        fh = st.session_state.fence[sym]["high"]
-
-        st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
-
-        if last and fl and fh:
-            if last < fl or last > fh:
-                st.error("🚨 Fence breached")
-            else:
-                st.success("✅ Inside fence")
-
-# ================= FOOTER =================
+# ------------------------------------------------------------
+# UI HEADER
+# ------------------------------------------------------------
+st.markdown("## 🧨 RedEyeBatt Monster Cockpit")
+st.markdown("**Live BTC price — data sanity check**")
 st.markdown("---")
-st.caption("Paper trading only. No broker. No real money. Built for RedEyeBatt.")
 
+# ------------------------------------------------------------
+# FETCH PRICE
+# ------------------------------------------------------------
+btc_price = fetch_btc_price()
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# ------------------------------------------------------------
+# DISPLAY
+# ------------------------------------------------------------
+st.markdown("### 📊 BINANCE:BTCUSDT")
+
+if btc_price is None:
+    st.error("❌ Waiting for BTC data...")
+else:
+    st.metric(
+        label="BTC Last Price",
+        value=f"${btc_price:,.2f}"
+    )
+    st.caption(f"Updated: {now}")
+
+# ------------------------------------------------------------
+# FOOTER / DEBUG INFO
+# ------------------------------------------------------------
+st.markdown("---")
+st.caption(
+    "Paper trading only • No broker • No fake data • Built for RedEyeBatt"
+)
+
+# ------------------------------------------------------------
+# FORCED REFRESH (1 SECOND TICK)
+# ------------------------------------------------------------
+import time
+time.sleep(1)
+st.experimental_rerun()
