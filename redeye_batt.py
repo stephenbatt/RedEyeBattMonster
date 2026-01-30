@@ -28,7 +28,6 @@ st.set_page_config(
 # Every 1 second Streamlit reruns the script
 # ------------------------------------------------------------
 st.experimental_set_query_params()
-st_autorefresh = st.experimental_rerun
 
 # ------------------------------------------------------------
 # BINANCE BTC PRICE FETCH (REAL, LIVE)
@@ -91,3 +90,4 @@ st.caption(
 import time
 time.sleep(1)
 st.experimental_rerun()
+
