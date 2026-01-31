@@ -173,3 +173,4 @@ if st.session_state.history:
 st.caption("This cockpit is paper only. No broker, no real money. Built for RedEyeBatt.")
 
 
+
