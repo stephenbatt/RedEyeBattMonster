@@ -3,7 +3,9 @@ import time
 import threading
 import requests
 import streamlit as st
+import pandas as pd
 from datetime import datetime
+import plotly.graph_objects as go
 
 # ───────── CONFIG ─────────
 FINNHUB_KEY = os.getenv("FINNHUB_KEY", "").strip()
@@ -64,12 +66,14 @@ st.session_state.setdefault("bankroll", 10000.0)
 st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
+st.session_state.setdefault("candles", {"SPY": pd.DataFrame(columns=["time","open","high","low","close"])})
 
 # ───────── UI LAYOUT ─────────
 branding, market = st.columns([1,2])
 
 # Branding column
 with branding:
+    # Placeholder logo
     st.image("https://via.placeholder.com/120x120.png?text=RedEyeBatt", width=120)
     st.markdown("### 🧮 Scoreboard")
     for s, rec in st.session_state.scoreboard.items():
@@ -80,7 +84,6 @@ with branding:
 with market:
     st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
-
     st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
     with shared_lock:
@@ -91,6 +94,7 @@ with market:
         last = data["last"]
         updated = data["updated"]
         st.subheader(f"📊 {sym}")
+
         if last:
             st.write(f"Price: ${last:,.2f}")
             st.caption(f"Updated: {updated}")
@@ -113,6 +117,30 @@ with market:
         fh = st.session_state.fence[sym]["high"]
         st.write(f"Fence: Low = {fl if fl else '--'} | High = {fh if fh else '--'}")
 
+    # ───────── CANDLESTICK (SPY) ─────────
+    spy_price = snapshot["SPY"]["last"]
+    if spy_price:
+        candle_df = st.session_state.candles["SPY"]
+        now_time = datetime.now()
+        new_row = pd.DataFrame([{
+            "time": now_time,
+            "open": spy_price,
+            "high": spy_price,
+            "low": spy_price,
+            "close": spy_price
+        }])
+        st.session_state.candles["SPY"] = pd.concat([candle_df, new_row], ignore_index=True).tail(50)
+        fig = go.Figure(data=[go.Candlestick(
+            x=st.session_state.candles["SPY"]["time"],
+            open=st.session_state.candles["SPY"]["open"],
+            high=st.session_state.candles["SPY"]["high"],
+            low=st.session_state.candles["SPY"]["low"],
+            close=st.session_state.candles["SPY"]["close"]
+        )])
+        fig.update_layout(height=300, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+# ───────── HISTORY ─────────
 st.subheader("📅 Trade History")
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history[::-1])
@@ -122,7 +150,7 @@ else:
 
 st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
 
-# ───────── Auto-refresh every 5 seconds ─────────
+# ───────── AUTO-REFRESH EVERY POLL ─────────
 st.experimental_rerun()
 
 
