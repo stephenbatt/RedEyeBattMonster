@@ -16,7 +16,6 @@ TICKERS = ["SPY", "BINANCE:BTCUSDT"]
 BASE_URL = "https://finnhub.io/api/v1/quote"
 POLL_SECONDS = 5
 
-# Shared prices for live polling
 shared_prices = {s: {"last": 0.0, "high": 0.0, "low": 0.0, "updated": None} for s in TICKERS}
 shared_lock = threading.Lock()
 
@@ -54,10 +53,35 @@ def poller_loop():
             with shared_lock:
                 cur = shared_prices[sym]
                 cur["last"] = last
-                cur["high"] = last
-                cur["low"] = last
+                cur["high"] = last  # placeholder
+                cur["low"] = last   # placeholder
                 cur["updated"] = now
         time.sleep(POLL_SECONDS)
+
+# ───────── AUTO-FENCE RESET ─────────
+def reset_fences_at_open():
+    """Resets all fences once per day at 9:15 AM."""
+    now = datetime.now()
+    reset_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    last_reset = st.session_state.get("last_fence_reset")
+
+    if now >= reset_time and (not last_reset or last_reset.date() < now.date()):
+        for sym in TICKERS:
+            last_price = shared_prices[sym]["last"]
+            if last_price > 0:
+                st.session_state.fence[sym]["low"] = last_price - 10
+                st.session_state.fence[sym]["high"] = last_price + 10
+        st.session_state["last_fence_reset"] = now
+        st.session_state.history.append({
+            "Symbol": "ALL",
+            "Last": None,
+            "Low": None,
+            "High": None,
+            "Outcome": "FENCES RESET",
+            "PnL": 0,
+            "Time": now.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        st.success("⚡ Fences auto-reset at market open!")
 
 # ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
@@ -72,37 +96,6 @@ st.session_state.setdefault("bankroll", 10000.0)
 st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
-st.session_state.setdefault("auto_fence_on", True)
-st.session_state.setdefault("last_fence_reset", None)
-
-# ───────── AUTO-FENCE RESET ─────────
-def reset_fences_at_open():
-    if not st.session_state.auto_fence_on:
-        return
-    now = datetime.now()
-    reset_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    last_reset = st.session_state.get("last_fence_reset")
-
-    if now >= reset_time and (not last_reset or last_reset.date() < now.date()):
-        with shared_lock:
-            for sym in TICKERS:
-                last_price = shared_prices[sym]["last"]
-                if last_price > 0:
-                    st.session_state.fence[sym]["low"] = last_price - 10
-                    st.session_state.fence[sym]["high"] = last_price + 10
-        st.session_state["last_fence_reset"] = now
-        st.session_state.history.append({
-            "Symbol": "ALL",
-            "Last": None,
-            "Low": None,
-            "High": None,
-            "Outcome": "FENCES RESET",
-            "PnL": 0,
-            "Time": now.strftime("%Y-%m-%d %H:%M:%S")
-        })
-        st.success("⚡ Fences auto-reset at market open!")
-
-reset_fences_at_open()  # call on every rerun
 
 # ───────── LAYOUT ─────────
 branding, market = st.columns([1, 2])
@@ -119,15 +112,18 @@ with market:
     st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
 
-    st.checkbox("⚡ Auto-fence reset at 9:15 AM", value=st.session_state.auto_fence_on, key="auto_fence_on")
     st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
     with shared_lock:
         prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
 
+    # Auto-reset fences at 9:15 AM
+    reset_fences_at_open()
+
     for sym in TICKERS:
         data = prices_snapshot[sym]
         last, high, low, updated = data["last"], data["high"], data["low"], data["updated"]
+
         st.subheader(f"📊 {sym}")
         c1, c2, c3 = st.columns(3)
         c1.metric("🎯 Last", f"{last:,.2f}" if last else "--")
@@ -135,16 +131,19 @@ with market:
         c3.metric("📉 Low", f"{low:,.2f}" if low else "--")
         st.caption(f"Last update: {updated}" if updated else "Waiting for quote...")
 
+        # Buffer slider
         buf_key = f"buffer_{sym}"
         if buf_key not in st.session_state:
             st.session_state[buf_key] = 10
         buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
 
+        # Bet input
         bet_key = f"bet_{sym}"
         if bet_key not in st.session_state:
             st.session_state[bet_key] = 200
         bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
 
+        # Set fence
         if st.button(f"Set fence around {sym}", key=f"set_{sym}"):
             st.session_state.fence[sym]["low"] = max(0.0, last - buf)
             st.session_state.fence[sym]["high"] = last + buf
@@ -159,6 +158,7 @@ with market:
             else:
                 st.success(f"✅ {sym} is inside the fence.")
 
+        # Settle bet
         if st.button(f"Settle {sym}", key=f"settle_{sym}"):
             win = fl <= last <= fh
             pnl = bet if win else -bet
@@ -166,12 +166,8 @@ with market:
             st.session_state.bankroll += pnl
             st.session_state.scoreboard[sym]["wins" if win else "losses"] += 1
             st.session_state.history.append({
-                "Symbol": sym,
-                "Last": last,
-                "Low": fl,
-                "High": fh,
-                "Outcome": outcome,
-                "PnL": pnl,
+                "Symbol": sym, "Last": last, "Low": fl, "High": fh,
+                "Outcome": outcome, "PnL": pnl,
                 "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
             sound = "cash-register-kaching-sound-effect-125042.mp3" if win else "ding-101492.mp3"
@@ -180,7 +176,7 @@ with market:
 
         st.markdown("---")
 
-# ───────── HISTORY & CHART ─────────
+# ───────── History & Chart ─────────
 st.subheader("📅 Trade History")
 if st.button("Reset History"):
     st.session_state.history = []
@@ -191,7 +187,7 @@ if st.session_state.history:
     st.dataframe(df, use_container_width=True)
 
     st.subheader("📈 Bankroll Over Time")
-    df_chart = df.groupby("Time")["PnL"].sum().cumsum() + 10000
+    df_chart = df.groupby("Time")["PnL"].sum().cumsum() + st.session_state.bankroll
     fig, ax = plt.subplots()
     ax.plot(df_chart.index, df_chart.values, marker="o")
     ax.set_ylabel("Bankroll ($)")
