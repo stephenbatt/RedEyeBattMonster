@@ -1,17 +1,16 @@
 # ============================================================
-# RedEyeBatt Monster Cockpit — HARD RESET VERSION
-# BTC ONLY — REAL DATA — NO PAPER LOGIC YET
+# RedEyeBatt Monster Cockpit — CLEAN BASELINE (FIXED)
+# BTC ONLY — REAL BINANCE DATA — STREAMLIT CLOUD SAFE
 #
 # PURPOSE:
-# - Prove live data is flowing
-# - BTC price must tick up/down in real time
-# - No fences, no betting, no score logic
-#
-# If this does NOT move, the problem is NOT our code.
+# - Prove LIVE BTC data is flowing
+# - BTC price must tick up/down
+# - No fake data, no models, no logic yet
 # ============================================================
 
 import streamlit as st
 import requests
+import time
 from datetime import datetime
 
 # ------------------------------------------------------------
@@ -24,44 +23,32 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
-# AUTO REFRESH (THIS IS THE HEARTBEAT)
-# Every 1 second Streamlit reruns the script
-# ------------------------------------------------------------
-st.experimental_set_query_params()
-st_autorefresh = st.experimental_rerun
-
-# ------------------------------------------------------------
-# BINANCE BTC PRICE FETCH (REAL, LIVE)
+# BINANCE BTC PRICE FETCH (REAL LIVE DATA)
 # ------------------------------------------------------------
 def fetch_btc_price():
-    """
-    Pulls LIVE BTCUSDT price directly from Binance.
-    This endpoint updates constantly.
-    """
     try:
         r = requests.get(
             "https://api.binance.com/api/v3/ticker/price",
             params={"symbol": "BTCUSDT"},
             timeout=5
         )
-        data = r.json()
-        return float(data["price"])
-    except Exception as e:
+        r.raise_for_status()
+        return float(r.json()["price"])
+    except Exception:
         return None
-
 
 # ------------------------------------------------------------
 # UI HEADER
 # ------------------------------------------------------------
 st.markdown("## 🧨 RedEyeBatt Monster Cockpit")
-st.markdown("**Live BTC price — data sanity check**")
+st.markdown("**Live BTC heartbeat — sanity check**")
 st.markdown("---")
 
 # ------------------------------------------------------------
-# FETCH PRICE
+# FETCH DATA
 # ------------------------------------------------------------
 btc_price = fetch_btc_price()
-now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ------------------------------------------------------------
 # DISPLAY
@@ -69,26 +56,23 @@ now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 st.markdown("### 📊 BINANCE:BTCUSDT")
 
 if btc_price is None:
-    st.error("❌ Waiting for BTC data...")
+    st.error("❌ Waiting for BTC price from Binance...")
 else:
     st.metric(
         label="BTC Last Price",
         value=f"${btc_price:,.2f}"
     )
-    st.caption(f"Updated: {now}")
+    st.caption(f"Updated: {timestamp}")
 
 # ------------------------------------------------------------
-# FOOTER / DEBUG INFO
+# FOOTER
 # ------------------------------------------------------------
 st.markdown("---")
-st.caption(
-    "Paper trading only • No broker • No fake data • Built for RedEyeBatt"
-)
+st.caption("Paper only • No broker • Real data • Built for RedEyeBatt")
 
 # ------------------------------------------------------------
-# FORCED REFRESH (1 SECOND TICK)
+# HEARTBEAT — FORCE UPDATE EVERY 1 SECOND
 # ------------------------------------------------------------
-import time
 time.sleep(1)
 st.experimental_rerun()
 
