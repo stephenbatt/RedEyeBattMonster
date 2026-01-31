@@ -91,6 +91,7 @@ if "poller_started" not in st.session_state:
 
 st.session_state.setdefault("bankroll", 10000.0)
 st.session_state.setdefault("fence", {"SPY": {"low": None, "high": None}})
+st.session_state.setdefault("scoreboard", {"SPY": {"wins": 0, "losses": 0}})
 
 # Layout
 branding, market = st.columns([1, 2])
@@ -99,8 +100,8 @@ branding, market = st.columns([1, 2])
 with branding:
     st.image("logo.gif", width=120)
     st.markdown("### 🧮 Scoreboard")
-    st.write("SPY: ✅ 0 | ❌ 0")
-    st.write("BTC: ✅ 0 | ❌ 0")
+    st.write(f"SPY: ✅ {st.session_state.scoreboard['SPY']['wins']} | ❌ {st.session_state.scoreboard['SPY']['losses']}")
+    st.write("BTC: ✅ heartbeat only")
 
 # Market
 with market:
@@ -127,6 +128,18 @@ with market:
         st.session_state.fence["SPY"]["high"] = high_avg
         st.session_state.fence["SPY"]["low"] = low_avg
         st.markdown(f"**SPY Fence (5-day avg):** Low = {low_avg} | High = {high_avg}")
+
+        # Check for breach
+        last_price = spy["last"]
+        if last_price:
+            if last_price > high_avg:
+                st.error(f"🚨 SPY breached the HIGH fence! Price = {last_price}")
+                st.session_state.scoreboard['SPY']['losses'] += 1
+            elif last_price < low_avg:
+                st.error(f"🚨 SPY breached the LOW fence! Price = {last_price}")
+                st.session_state.scoreboard['SPY']['losses'] += 1
+            else:
+                st.success(f"✅ SPY is inside the fence.")
     else:
         st.markdown("❌ Could not calculate SPY fence. Waiting for data...")
 
@@ -134,6 +147,6 @@ with market:
     st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
 st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
-
+ 
 
 
