@@ -15,6 +15,7 @@ POLL_SECONDS = 5
 MARKET_OPEN_HOUR = 9
 MARKET_OPEN_MINUTE = 15
 ALERT_SOUND = "ding-101492.mp3"  # add this file to your project
+DEFAULT_BET = 200
 
 # Shared prices and locks
 shared_prices = {s: {"last": 0.0, "updated": None} for s in TICKERS}
@@ -98,6 +99,8 @@ if "poller_started" not in st.session_state:
 st.session_state.setdefault("bankroll", 10000.0)
 st.session_state.setdefault("fence", {"SPY": {"low": None, "high": None}})
 st.session_state.setdefault("scoreboard", {"SPY": {"wins": 0, "losses": 0}})
+st.session_state.setdefault("bet", DEFAULT_BET)
+st.session_state.setdefault("history", [])
 
 branding, market = st.columns([1, 2])
 
@@ -127,21 +130,28 @@ with market:
     st.write(f"SPY Price: ${spy['last']:,.2f}" if spy["last"] else "❌ Waiting for SPY data...")
     st.caption(f"Updated: {spy['updated']}" if spy["updated"] else "")
 
+    # Set manual bet
+    st.session_state.bet = st.number_input("💰 Bet per SPY ($)", value=st.session_state.bet, step=50)
+
     # SPY Fence
     fl = st.session_state.fence["SPY"]["low"]
     fh = st.session_state.fence["SPY"]["high"]
     if fl and fh:
         st.markdown(f"**SPY Fence:** Low = {fl} | High = {fh}")
-        # Breach alert
         last_price = spy["last"]
         if last_price:
-            if last_price > fh:
-                st.error(f"🚨 SPY breached the HIGH fence! Price = {last_price}")
+            # Breach auto-settle
+            if last_price > fh or last_price < fl:
+                st.error(f"🚨 SPY breached the fence! Price = {last_price}")
+                st.session_state.bankroll -= st.session_state.bet
                 st.session_state.scoreboard['SPY']['losses'] += 1
-                st.audio(ALERT_SOUND)
-            elif last_price < fl:
-                st.error(f"🚨 SPY breached the LOW fence! Price = {last_price}")
-                st.session_state.scoreboard['SPY']['losses'] += 1
+                st.session_state.history.append({
+                    "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Symbol": "SPY",
+                    "Price": last_price,
+                    "Outcome": "LOSS",
+                    "PnL": -st.session_state.bet
+                })
                 st.audio(ALERT_SOUND)
             else:
                 st.success(f"✅ SPY is inside the fence.")
@@ -149,9 +159,14 @@ with market:
         st.markdown("❌ SPY fence not set yet.")
 
     # Bankroll
-    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
+    st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
+
+# Trade history
+if st.session_state.history:
+    st.subheader("📅 Trade History")
+    df = pd.DataFrame(st.session_state.history[::-1])
+    st.dataframe(df, use_container_width=True)
+    st.download_button("📤 Export CSV", df.to_csv(index=False), "redeye_history.csv", "text/csv")
 
 st.caption("Paper trading only • No broker • Real market data • Built for RedEyeBatt")
-
-
 
