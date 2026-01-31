@@ -62,35 +62,30 @@ def poller_loop():
 # ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
+# Start poller thread once
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
 
 # ───────── SESSION STATE INIT ─────────
 st.session_state.setdefault("bankroll", 10000.0)
-st.session_state.setdefault("initial_bankroll", 10000.0)  # for daily reset
 st.session_state.setdefault("fence", {s: {"low": None, "high": None} for s in TICKERS})
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("scoreboard", {s: {"wins": 0, "losses": 0} for s in TICKERS})
 
-# ───────── AUTO-RESET AT MARKET OPEN (9:15 AM ET) ─────────
-def auto_daily_reset():
+# ───────── AUTO-FENCE RESET AT 9:15 AM ET ─────────
+def auto_reset_fences():
     eastern = timezone("US/Eastern")
     now = datetime.now(eastern)
     reset_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-
+    
     if "last_reset_date" not in st.session_state or st.session_state.last_reset_date != now.date():
         if now >= reset_time:
-            # Reset fences
             st.session_state.fence = {s: {"low": None, "high": None} for s in TICKERS}
-            # Reset bankroll
-            st.session_state.bankroll = st.session_state.initial_bankroll
-            # Clear trade history
-            st.session_state.history = []
             st.session_state.last_reset_date = now.date()
-            st.info("🛠 Daily reset executed: Bankroll, Fences, and History cleared.")
+            st.info("🛠 Fences reset for market open (9:15 AM ET)")
 
-auto_daily_reset()
+auto_reset_fences()
 
 # ───────── LAYOUT ─────────
 branding, market = st.columns([1, 2])
@@ -107,9 +102,7 @@ with market:
     st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
 
-    st.session_state.bankroll = st.number_input(
-        "💰 Bankroll", value=st.session_state.bankroll, step=100.0
-    )
+    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
 
     # Copy of shared prices for thread safety
     with shared_lock:
@@ -171,7 +164,7 @@ with market:
 
 # ───────── HISTORY & CHART ─────────
 st.subheader("📅 Trade History")
-if st.button("Reset History Manually"):
+if st.button("Reset History"):
     st.session_state.history = []
     st.success("History cleared.")
 
@@ -180,7 +173,7 @@ if st.session_state.history:
     st.dataframe(df, use_container_width=True)
 
     st.subheader("📈 Bankroll Over Time")
-    df_chart = df.groupby("Time")["PnL"].sum().cumsum() + st.session_state.initial_bankroll
+    df_chart = df.groupby("Time")["PnL"].sum().cumsum() + st.session_state.bankroll
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart.values, mode='lines+markers', name='Bankroll'))
     fig.update_layout(yaxis_title="Bankroll ($)", xaxis_title="Time")
@@ -189,4 +182,5 @@ if st.session_state.history:
     st.download_button("📤 Export CSV", df.to_csv(index=False), "redeye_history.csv", "text/csv")
 
 st.caption("This cockpit is paper only. No broker, no real money. Built for RedEyeBatt.")
+
 
