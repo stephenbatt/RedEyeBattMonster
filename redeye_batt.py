@@ -44,49 +44,24 @@ def poller_loop():
     while True:
         for sym in TICKERS:
             data = fetch_quote(sym)
-            if not data: 
+            if not data:
                 continue
             last = float(data.get("c") or 0.0)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            if last <= 0: 
+            if last <= 0:
                 continue
             with shared_lock:
                 cur = shared_prices[sym]
                 cur["last"] = last
-                cur["high"] = last  # placeholder
-                cur["low"] = last   # placeholder
+                # keep high/low updated over session
+                cur["high"] = max(cur["high"], last) if cur["high"] else last
+                cur["low"] = min(cur["low"], last) if cur["low"] else last
                 cur["updated"] = now
         time.sleep(POLL_SECONDS)
-
-# ───────── AUTO-FENCE RESET ─────────
-def reset_fences_at_open():
-    """Resets all fences once per day at 9:15 AM."""
-    now = datetime.now()
-    reset_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    last_reset = st.session_state.get("last_fence_reset")
-
-    if now >= reset_time and (not last_reset or last_reset.date() < now.date()):
-        for sym in TICKERS:
-            last_price = shared_prices[sym]["last"]
-            if last_price > 0:
-                st.session_state.fence[sym]["low"] = last_price - 10
-                st.session_state.fence[sym]["high"] = last_price + 10
-        st.session_state["last_fence_reset"] = now
-        st.session_state.history.append({
-            "Symbol": "ALL",
-            "Last": None,
-            "Low": None,
-            "High": None,
-            "Outcome": "FENCES RESET",
-            "PnL": 0,
-            "Time": now.strftime("%Y-%m-%d %H:%M:%S")
-        })
-        st.success("⚡ Fences auto-reset at market open!")
 
 # ───────── STREAMLIT UI ─────────
 st.set_page_config(page_title="🧨 RedEyeBatt Monster Cockpit", layout="wide")
 
-# Start poller thread
 if "poller_started" not in st.session_state:
     threading.Thread(target=poller_loop, daemon=True).start()
     st.session_state.poller_started = True
@@ -112,13 +87,14 @@ with market:
     st.title("🧨 RedEyeBatt Monster Cockpit")
     st.caption("Live market simulator — paper only. You are the house.")
 
-    st.session_state.bankroll = st.number_input("💰 Bankroll", value=st.session_state.bankroll, step=100.0)
+    st.session_state.bankroll = st.number_input(
+        "💰 Bankroll",
+        value=st.session_state.bankroll,
+        step=100.0
+    )
 
     with shared_lock:
         prices_snapshot = {k: v.copy() for k, v in shared_prices.items()}
-
-    # Auto-reset fences at 9:15 AM
-    reset_fences_at_open()
 
     for sym in TICKERS:
         data = prices_snapshot[sym]
@@ -133,14 +109,12 @@ with market:
 
         # Buffer slider
         buf_key = f"buffer_{sym}"
-        if buf_key not in st.session_state:
-            st.session_state[buf_key] = 10
+        st.session_state.setdefault(buf_key, 10)
         buf = st.slider(f"Buffer ± points for {sym}", 0, 50, st.session_state[buf_key], key=buf_key)
 
         # Bet input
         bet_key = f"bet_{sym}"
-        if bet_key not in st.session_state:
-            st.session_state[bet_key] = 200
+        st.session_state.setdefault(bet_key, 200)
         bet = st.number_input(f"Bet per {sym} ($)", 0, 5000, st.session_state[bet_key], key=bet_key)
 
         # Set fence
@@ -166,8 +140,12 @@ with market:
             st.session_state.bankroll += pnl
             st.session_state.scoreboard[sym]["wins" if win else "losses"] += 1
             st.session_state.history.append({
-                "Symbol": sym, "Last": last, "Low": fl, "High": fh,
-                "Outcome": outcome, "PnL": pnl,
+                "Symbol": sym,
+                "Last": last,
+                "Low": fl,
+                "High": fh,
+                "Outcome": outcome,
+                "PnL": pnl,
                 "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
             sound = "cash-register-kaching-sound-effect-125042.mp3" if win else "ding-101492.mp3"
