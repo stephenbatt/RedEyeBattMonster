@@ -105,3 +105,4 @@ update_btc()
 # Auto-refresh every 5 seconds for BTC heartbeat
 st.experimental_set_query_params(_ts=int(time.time()))
 st.experimental_rerun()
+
