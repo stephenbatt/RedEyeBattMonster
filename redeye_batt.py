@@ -91,6 +91,7 @@ st.markdown("Paper trading only • No broker • Real market data • Built for
 # -------------------------
 # AUTO-REFRESH LOOP (every 5 sec)
 # -------------------------
-st.experimental_singleton.clear()  # ensure fresh data each rerun
-st.experimental_rerun()  # rerun the script to update BTC price
+time.sleep(5)
+st.experimental_rerun()
+
 
